@@ -5,15 +5,39 @@ SAF-T Validator & Analytics — FastAPI Backend
 
 import os
 import uuid
+import secrets
 import shutil
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from typing import Optional
 
 from validator.report import generate_report
 from analytics.engine import analyze_file
 
 app = FastAPI(title="SAF-T Validator & Analytics", version="1.0.0")
+security = HTTPBasic()
+
+# Brugere med adgang
+USERS = {
+    "admin": "balai2025",
+    "Fabian": "Salvatore",
+}
+
+
+def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
+    """Verificér brugernavn og password."""
+    correct_password = USERS.get(credentials.username)
+    if not correct_password or not secrets.compare_digest(
+        credentials.password.encode("utf-8"), correct_password.encode("utf-8")
+    ):
+        from fastapi.responses import JSONResponse
+        raise HTTPException(
+            status_code=401,
+            detail="Forkert brugernavn eller adgangskode",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
 
 # CORS for Next.js frontend
 app.add_middleware(
@@ -58,6 +82,7 @@ def health():
 async def validate(
     file: UploadFile = File(...),
     version: Optional[str] = Form(None),
+    username: str = Depends(verify_credentials),
 ):
     """Validér en SAF-T fil (eksisterende validator-logik)."""
     file_path = await _save_upload(file)
@@ -80,6 +105,7 @@ async def validate(
 @app.post("/api/analyze")
 async def analyze(
     file: UploadFile = File(...),
+    username: str = Depends(verify_credentials),
 ):
     """Kør 103 momsanalyser på en SAF-T fil."""
     file_path = await _save_upload(file)
@@ -100,6 +126,7 @@ async def analyze(
 async def validate_and_analyze(
     file: UploadFile = File(...),
     version: Optional[str] = Form(None),
+    username: str = Depends(verify_credentials),
 ):
     """Kør både validering og analytics i ét kald."""
     file_path = await _save_upload(file)
