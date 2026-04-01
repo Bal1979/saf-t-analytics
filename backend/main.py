@@ -10,6 +10,8 @@ import shutil
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from typing import Optional
 
 from validator.report import generate_report
@@ -51,6 +53,13 @@ app.add_middleware(
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# Serve static files
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
+os.makedirs(STATIC_DIR, exist_ok=True)
+os.makedirs(TEMPLATES_DIR, exist_ok=True)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
 
 async def _save_upload(file: UploadFile) -> str:
     """Gem uploadet fil og returner stien."""
@@ -71,6 +80,14 @@ def _cleanup(file_path: str):
     """Slet uploadet fil."""
     if os.path.exists(file_path):
         os.remove(file_path)
+
+
+@app.get("/", response_class=HTMLResponse)
+def index(username: str = Depends(verify_credentials)):
+    """Serve frontend."""
+    template_path = os.path.join(TEMPLATES_DIR, "index.html")
+    with open(template_path, "r") as f:
+        return f.read()
 
 
 @app.get("/api/health")
