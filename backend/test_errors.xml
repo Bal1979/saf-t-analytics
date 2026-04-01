@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<AuditFile xmlns="urn:StandardAuditFile-Taxation-Financial:DK">
+  <Header>
+    <AuditFileVersion>2.0</AuditFileVersion>
+    <!-- Mangler AuditFileCountry -->
+    <AuditFileDateCreated>ugyldig-dato</AuditFileDateCreated>
+    <!-- Mangler SoftwareCompanyName -->
+    <SoftwareID>TestSystem</SoftwareID>
+    <SoftwareVersion>1.0</SoftwareVersion>
+    <Company>
+      <RegistrationNumber>123</RegistrationNumber>
+      <!-- Ugyldigt CVR: kun 3 cifre -->
+      <Name>Test Firma</Name>
+      <Address>
+        <City>Aarhus</City>
+        <!-- Mangler PostalCode og Country -->
+      </Address>
+    </Company>
+    <DefaultCurrencyCode>XYZ</DefaultCurrencyCode>
+    <!-- Ugyldig valuta -->
+    <!-- Mangler SelectionCriteria -->
+    <!-- Mangler TaxAccountingBasis -->
+  </Header>
+
+  <MasterFiles>
+    <GeneralLedgerAccounts>
+      <!-- Mangler NameOfStandardAccount -->
+      <!-- Mangler VersionOfStandardAccount -->
+      <Account>
+        <AccountID>1000</AccountID>
+        <AccountDescription>Bank</AccountDescription>
+        <AccountType>UgyldigType</AccountType>
+        <OpeningDebitBalance>50000.00</OpeningDebitBalance>
+        <!-- Mangler ClosingBalance -->
+      </Account>
+      <Account>
+        <AccountID>1000</AccountID>
+        <!-- Duplikeret AccountID -->
+        <AccountDescription>Duplikat</AccountDescription>
+        <OpeningCreditBalance>0</OpeningCreditBalance>
+        <ClosingCreditBalance>0</ClosingCreditBalance>
+      </Account>
+    </GeneralLedgerAccounts>
+    <!-- Mangler TaxTable -->
+  </MasterFiles>
+
+  <GeneralLedgerEntries>
+    <NumberOfEntries>5</NumberOfEntries>
+    <!-- Siger 5 men kun 1 transaktion -->
+    <TotalDebit>100.00</TotalDebit>
+    <TotalCredit>200.00</TotalCredit>
+    <!-- Ubalance -->
+    <Journal>
+      <JournalID>GL</JournalID>
+      <Transaction>
+        <TransactionID>TXN-001</TransactionID>
+        <!-- Mangler TransactionDate -->
+        <Line>
+          <RecordID>1</RecordID>
+          <AccountID>9999</AccountID>
+          <!-- Refererer til konto der ikke findes -->
+          <!-- Mangler DebitAmount og CreditAmount -->
+        </Line>
+      </Transaction>
+    </Journal>
+  </GeneralLedgerEntries>
+</AuditFile>
