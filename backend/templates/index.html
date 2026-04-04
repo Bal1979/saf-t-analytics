@@ -102,6 +102,16 @@
     </div>
 
     <script>
+    function escapeHtml(str) {
+        if (str == null) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
     const uploadArea = document.getElementById('upload-area');
     const fileInput = document.getElementById('file-input');
 
@@ -135,23 +145,23 @@
             const banner = document.getElementById('val-banner');
             const s = v.summary;
             banner.className = 'status-banner ' + (s.status === 'GYLDIG' ? 'status-valid' : s.status === 'GYLDIG MED ADVARSLER' ? 'status-warning' : 'status-invalid');
-            banner.innerHTML = `<span class="status-icon">${s.status === 'GYLDIG' ? '✅' : s.status === 'GYLDIG MED ADVARSLER' ? '⚠️' : '❌'}</span><div><h2>${s.status}</h2><p>${s.message}</p></div>`;
+            banner.innerHTML = `<span class="status-icon">${s.status === 'GYLDIG' ? '✅' : s.status === 'GYLDIG MED ADVARSLER' ? '⚠️' : '❌'}</span><div><h2>${escapeHtml(s.status)}</h2><p>${escapeHtml(s.message)}</p></div>`;
 
             const sections = document.getElementById('val-sections');
             sections.innerHTML = '';
             for (const [name, sec] of Object.entries(v.sections || {})) {
                 sections.innerHTML += `<div class="section-card">
                     <div class="section-header" onclick="this.parentElement.classList.toggle('expanded')">
-                        <span class="section-name">${name}</span>
-                        <span class="section-counts">${sec.errors ? `<span class="count-error">${sec.errors} fejl</span>` : ''}${sec.warnings ? `<span class="count-warning">${sec.warnings} advarsler</span>` : ''}</span>
+                        <span class="section-name">${escapeHtml(name)}</span>
+                        <span class="section-counts">${sec.errors ? `<span class="count-error">${escapeHtml(sec.errors)} fejl</span>` : ''}${sec.warnings ? `<span class="count-warning">${escapeHtml(sec.warnings)} advarsler</span>` : ''}</span>
                         <span class="section-toggle">▼</span>
                     </div>
                     <div class="section-body">${(sec.issues || []).map(i => `
                         <div class="issue ${i.level === 'FEJL' ? 'issue-error' : 'issue-warning'}">
-                            <span class="issue-badge ${i.level === 'FEJL' ? 'badge-error' : 'badge-warning'}">${i.level}</span>
-                            <span class="issue-category">${i.category}</span>
-                            <p class="issue-message">${i.message}</p>
-                            ${i.fix ? `<div class="fix-suggestion"><div class="fix-header" onclick="this.parentElement.classList.toggle('fix-expanded')"><span>💡</span><span class="fix-label">Vis løsningsforslag</span><span class="fix-toggle">▼</span></div><div class="fix-body"><p class="fix-text">${i.fix}</p>${i.example ? `<pre class="fix-example"><code>${i.example.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</code></pre>` : ''}</div></div>` : ''}
+                            <span class="issue-badge ${i.level === 'FEJL' ? 'badge-error' : 'badge-warning'}">${escapeHtml(i.level)}</span>
+                            <span class="issue-category">${escapeHtml(i.category)}</span>
+                            <p class="issue-message">${escapeHtml(i.message)}</p>
+                            ${i.fix ? `<div class="fix-suggestion"><div class="fix-header" onclick="this.parentElement.classList.toggle('fix-expanded')"><span>💡</span><span class="fix-label">Vis løsningsforslag</span><span class="fix-toggle">▼</span></div><div class="fix-body"><p class="fix-text">${escapeHtml(i.fix)}</p>${i.example ? `<pre class="fix-example"><code>${escapeHtml(i.example)}</code></pre>` : ''}</div></div>` : ''}
                         </div>`).join('')}
                     </div>
                 </div>`;
@@ -165,7 +175,7 @@
                 const score = a.overall_score;
                 document.getElementById('score-number').textContent = score;
                 document.getElementById('score-circle').className = 'score-circle ' + (score >= 80 ? 'score-good' : score >= 50 ? 'score-warning' : 'score-bad');
-                document.getElementById('score-summary').textContent = `${a.total_findings || 0} findings fundet`;
+                document.getElementById('score-summary').textContent = `${escapeHtml(a.total_findings || 0)} findings fundet`;
             }
             document.getElementById('analytics-content').innerHTML = '<p style="color:#666;padding:12px 0;">Analytics dashboard kommer snart med fuldt drill-down.</p>';
         }

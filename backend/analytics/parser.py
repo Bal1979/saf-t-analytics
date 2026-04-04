@@ -60,7 +60,7 @@ def parse_saft_file(file_path: str) -> Optional[dict]:
     - summary: Opsummering (totaler, antal)
     """
     try:
-        parser = etree.XMLParser(remove_blank_text=True, huge_tree=True)
+        parser = etree.XMLParser(remove_blank_text=True, huge_tree=True, resolve_entities=False, no_network=True)
         tree = etree.parse(file_path, parser)
         root = tree.getroot()
     except Exception:

@@ -20,11 +20,20 @@ from analytics.engine import analyze_file
 app = FastAPI(title="SAF-T Validator & Analytics", version="1.0.0")
 security = HTTPBasic()
 
-# Brugere med adgang
-USERS = {
-    "admin": "balai2025",
-    "Fabian": "Salvatore",
-}
+# Brugere med adgang (fra environment variable eller fallback)
+def _parse_auth_users(env_str: str) -> dict:
+    """Parse 'user1:pass1,user2:pass2' format til dict."""
+    users = {}
+    for pair in env_str.split(","):
+        pair = pair.strip()
+        if ":" in pair:
+            username, password = pair.split(":", 1)
+            users[username.strip()] = password.strip()
+    return users
+
+USERS = _parse_auth_users(
+    os.environ.get("AUTH_USERS", "admin:balai2025,Fabian:Salvatore")
+)
 
 
 def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
@@ -61,6 +70,9 @@ os.makedirs(TEMPLATES_DIR, exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+
+
 async def _save_upload(file: UploadFile) -> str:
     """Gem uploadet fil og returner stien."""
     if not file.filename.endswith(".xml"):
@@ -69,8 +81,19 @@ async def _save_upload(file: UploadFile) -> str:
     job_id = str(uuid.uuid4())[:8]
     file_path = os.path.join(UPLOAD_DIR, f"{job_id}_{file.filename}")
 
+    content = await file.read()
+
+    if len(content) == 0:
+        raise HTTPException(400, "Filen er tom")
+
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            400,
+            f"Filen er for stor ({len(content) / (1024*1024):.1f} MB). "
+            f"Maksimum er {MAX_FILE_SIZE / (1024*1024):.0f} MB.",
+        )
+
     with open(file_path, "wb") as f:
-        content = await file.read()
         f.write(content)
 
     return file_path
