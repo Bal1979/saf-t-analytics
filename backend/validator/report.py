@@ -4,6 +4,7 @@ Samler alle valideringsresultater i en struktureret rapport.
 Understøtter SAF-T v1.0 og v2.0.
 """
 
+import os
 from validator.xsd_validator import validate_xml
 from validator.business_rules import validate_business_rules
 from validator.fix_suggestions import enrich_with_suggestions
@@ -16,7 +17,7 @@ def generate_report(file_path, saft_version=None):
     Returnerer et dict med alle resultater.
     """
     report = {
-        "file": file_path,
+        "file": os.path.basename(file_path),
         "sections": {},
         "errors": [],
         "warnings": [],

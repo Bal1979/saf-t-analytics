@@ -100,21 +100,21 @@ def build_report(data: dict, findings: list) -> dict:
 
     return {
         "overall_score": overall_score,
-        "summary": data["summary"],
+        "summary": data.get("summary", {}),
         "impact_summary": {
             "economic": {
                 "total_findings": len(economic),
                 "negative_amount": round(economic_negative, 2),
                 "positive_amount": round(economic_positive, 2),
                 "net_amount": round(economic_positive - economic_negative, 2),
-                "currency": data["header"].get("currency", "DKK"),
+                "currency": data.get("header", {}).get("currency", "DKK"),
             },
             "interest_risk": {
                 "total_findings": len(interest_risk),
                 "negative_amount": round(interest_negative, 2),
                 "positive_amount": round(interest_positive, 2),
                 "net_amount": round(interest_positive - interest_negative, 2),
-                "currency": data["header"].get("currency", "DKK"),
+                "currency": data.get("header", {}).get("currency", "DKK"),
             },
             "compliance": {
                 "total_findings": len(compliance),
