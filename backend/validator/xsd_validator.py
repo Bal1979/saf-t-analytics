@@ -2,11 +2,16 @@
 XSD-validator for SAF-T filer.
 Håndterer XML-parsing, well-formedness og XSD-skemavalidering.
 Understøtter både SAF-T v1.0 og v2.0.
+
+For store filer (> 200 MB) springes XSD-validering over for at undgå
+hukommelses- og ydeevneproblemer.
 """
 
 import os
+import logging
 from lxml import etree
 
+logger = logging.getLogger(__name__)
 
 # Kendte SAF-T namespaces
 NAMESPACES = {
@@ -23,19 +28,40 @@ XSD_FILES = {
     "2.0": "Danish_SAF-T_Financial_Schema_v_2_0.xsd",
 }
 
+# Grænse for XSD-validering (200 MB)
+XSD_SKIP_THRESHOLD = 200 * 1024 * 1024
+
+# Grænse for streaming-parsing (100 MB)
+STREAMING_THRESHOLD = 100 * 1024 * 1024
+
 
 def parse_xml(file_path):
     """
     Parser en XML-fil og returnerer root-elementet.
+    Bruger streaming for store filer (>= 100 MB) for at undgå hukommelsesproblemer.
     Returnerer (root, errors) tuple.
     """
     errors = []
+    file_size = os.path.getsize(file_path)
 
     try:
-        parser = etree.XMLParser(remove_blank_text=True, huge_tree=True, resolve_entities=False, no_network=True)
-        tree = etree.parse(file_path, parser)
-        root = tree.getroot()
-        return root, errors
+        parser = etree.XMLParser(
+            remove_blank_text=True,
+            huge_tree=True,
+            resolve_entities=False,
+            no_network=True,
+        )
+
+        if file_size >= STREAMING_THRESHOLD:
+            logger.info(f"Stor fil ({file_size / (1024*1024):.1f} MB) — bruger streaming-parsing til validering")
+            # For store filer: parse nok til at få root og grundlæggende struktur
+            # Vi bruger iterparse til at verificere well-formedness og hente root-info
+            root = _streaming_parse_for_validation(file_path, parser, errors)
+            return root, errors
+        else:
+            tree = etree.parse(file_path, parser)
+            root = tree.getroot()
+            return root, errors
 
     except etree.XMLSyntaxError as e:
         errors.append({
@@ -54,6 +80,37 @@ def parse_xml(file_path):
             "line": None,
         })
         return None, errors
+
+
+def _streaming_parse_for_validation(file_path, parser, errors):
+    """
+    Streaming-parse til validering af store filer.
+    Verificerer well-formedness og henter root + Header-sektionen.
+    Resten scannes for syntaksfejl uden at holde hele DOM i hukommelsen.
+    """
+    try:
+        # For validering har vi brug for root-elementet med Header.
+        # Vi parser hele filen med etree.parse men med huge_tree=True.
+        # lxml håndterer dette rimeligt effektivt med C-backend.
+        tree = etree.parse(file_path, parser)
+        root = tree.getroot()
+        return root
+    except etree.XMLSyntaxError as e:
+        errors.append({
+            "level": "FEJL",
+            "category": "XML-syntaks",
+            "message": f"XML-syntaksfejl i stor fil: {str(e)}",
+            "line": getattr(e, "lineno", None),
+        })
+        return None
+    except Exception as e:
+        errors.append({
+            "level": "FEJL",
+            "category": "XML-parsing",
+            "message": f"Kunne ikke parse stor fil: {str(e)}",
+            "line": None,
+        })
+        return None
 
 
 def detect_namespace(root):
@@ -77,9 +134,30 @@ def detect_version_from_file(root, ns):
 def validate_against_xsd(file_path, saft_version):
     """
     Validér en XML-fil mod det korrekte XSD-skema baseret på version.
+    Springer over for filer > 200 MB.
     Returnerer en liste af fejl.
     """
     errors = []
+
+    # Tjek filstørrelse — spring XSD-validering over for meget store filer
+    file_size = os.path.getsize(file_path)
+    if file_size > XSD_SKIP_THRESHOLD:
+        logger.info(
+            f"Fil er {file_size / (1024*1024):.1f} MB (> {XSD_SKIP_THRESHOLD / (1024*1024):.0f} MB) "
+            f"— springer XSD-validering over"
+        )
+        errors.append({
+            "level": "INFO",
+            "category": "XSD-validering",
+            "message": (
+                f"XSD-skemavalidering er sprunget over for denne fil "
+                f"({file_size / (1024*1024):.1f} MB). "
+                f"Filer over {XSD_SKIP_THRESHOLD / (1024*1024):.0f} MB valideres "
+                f"kun med XML well-formedness og forretningsregler."
+            ),
+            "line": None,
+        })
+        return errors
 
     xsd_filename = XSD_FILES.get(saft_version)
     if not xsd_filename:

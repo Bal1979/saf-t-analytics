@@ -2,10 +2,21 @@
 SAF-T Data Parser
 Udtrækker struktureret data fra SAF-T XML-filer til brug for analytics.
 Konverterer XML til Python datastrukturer (dicts/lists) der er nemme at analysere.
+
+Understøtter to parse-modi:
+- DOM-parsing (lxml.etree.parse) for filer under 100 MB
+- Streaming-parsing (lxml.etree.iterparse) for filer >= 100 MB (op til 2 GB)
 """
 
+import os
+import logging
 from lxml import etree
 from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+# Grænse for streaming-parsing (100 MB)
+STREAMING_THRESHOLD = 100 * 1024 * 1024
 
 
 def _find(element, path, ns):
@@ -45,9 +56,26 @@ def _decimal(element, path, ns, default=0.0):
     return default
 
 
-def parse_saft_file(file_path: str) -> Optional[dict]:
+def _tag_local(tag):
+    """Hent lokalt tagnavn uden namespace."""
+    if "}" in tag:
+        return tag.split("}")[1]
+    return tag
+
+
+def _ns_tag(local_name, ns):
+    """Byg fuldt kvalificeret tagnavn med namespace."""
+    if ns:
+        return f"{{{ns}}}{local_name}"
+    return local_name
+
+
+def parse_saft_file(file_path: str, progress_callback=None) -> Optional[dict]:
     """
     Parser en SAF-T XML-fil og returnerer struktureret data.
+
+    Vælger automatisk mellem DOM-parsing og streaming baseret på filstørrelse.
+    progress_callback: Optionel funktion(percent, message) til at rapportere fremskridt.
 
     Returnerer et dict med:
     - header: Firmadata, periode, version
@@ -59,12 +87,32 @@ def parse_saft_file(file_path: str) -> Optional[dict]:
     - journals: Journaloversigt
     - summary: Opsummering (totaler, antal)
     """
+    file_size = os.path.getsize(file_path)
+
+    if file_size >= STREAMING_THRESHOLD:
+        logger.info(f"Fil er {file_size / (1024*1024):.1f} MB — bruger streaming-parser (iterparse)")
+        return _parse_streaming(file_path, file_size, progress_callback)
+    else:
+        logger.info(f"Fil er {file_size / (1024*1024):.1f} MB — bruger DOM-parser")
+        return _parse_dom(file_path, progress_callback)
+
+
+def _parse_dom(file_path: str, progress_callback=None) -> Optional[dict]:
+    """DOM-baseret parser til filer under 100 MB (original implementering)."""
     try:
-        parser = etree.XMLParser(remove_blank_text=True, huge_tree=True, resolve_entities=False, no_network=True)
+        parser = etree.XMLParser(
+            remove_blank_text=True,
+            huge_tree=True,
+            resolve_entities=False,
+            no_network=True,
+        )
         tree = etree.parse(file_path, parser)
         root = tree.getroot()
     except Exception:
         return None
+
+    if progress_callback:
+        progress_callback(10, "XML parsed — udtrækker data")
 
     # Detektér namespace
     ns = root.tag.split("}")[0].strip("{") if "}" in root.tag else ""
@@ -80,16 +128,319 @@ def parse_saft_file(file_path: str) -> Optional[dict]:
         "summary": {},
     }
 
+    if progress_callback:
+        progress_callback(40, "Master-data udtrukket — parser transaktioner")
+
     # Parse transaktioner
     transactions, journals = _parse_transactions(root, ns)
     data["transactions"] = transactions
     data["journals"] = journals
 
+    if progress_callback:
+        progress_callback(80, "Transaktioner udtrukket — beregner opsummering")
+
     # Beregn opsummering
     data["summary"] = _compute_summary(data)
 
+    if progress_callback:
+        progress_callback(90, "Parsing færdig")
+
     return data
 
+
+# =============================================================================
+# Streaming parser (iterparse) til filer >= 100 MB
+# =============================================================================
+
+def _parse_streaming(file_path: str, file_size: int, progress_callback=None) -> Optional[dict]:
+    """
+    Streaming-parser ved brug af lxml.etree.iterparse().
+    Behandler filen i chunks uden at loade hele DOM-træet i hukommelsen.
+    """
+    data = {
+        "header": {},
+        "accounts": [],
+        "tax_table": [],
+        "suppliers": [],
+        "customers": [],
+        "transactions": [],
+        "journals": [],
+        "summary": {},
+    }
+
+    ns = ""
+    current_journal_id = ""
+    current_journal_desc = ""
+    current_journal_type = ""
+    journal_txn_counts = {}
+    bytes_processed = 0
+
+    try:
+        context = etree.iterparse(
+            file_path,
+            events=("end",),
+            tag=None,
+            huge_tree=True,
+            resolve_entities=False,
+            no_network=True,
+        )
+
+        for event, elem in context:
+            local_tag = _tag_local(elem.tag)
+
+            # Detektér namespace fra root
+            if not ns and local_tag == "AuditFile":
+                if "}" in elem.tag:
+                    ns = elem.tag.split("}")[0].strip("{")
+
+            # --- Header ---
+            if local_tag == "Header":
+                data["header"] = _parse_header_from_element(elem, ns)
+                if progress_callback:
+                    progress_callback(10, "Header udtrukket")
+                elem.clear()
+                while elem.getprevious() is not None:
+                    del elem.getparent()[0]
+                continue
+
+            # --- Account (inde i GeneralLedgerAccounts) ---
+            if local_tag == "Account":
+                parent = elem.getparent()
+                if parent is not None and _tag_local(parent.tag) == "GeneralLedgerAccounts":
+                    standard_name = _text(parent, "NameOfStandardAccount", ns, "")
+                    standard_version = _text(parent, "VersionOfStandardAccount", ns, "")
+                    data["accounts"].append({
+                        "account_id": _text(elem, "AccountID", ns, ""),
+                        "description": _text(elem, "AccountDescription", ns, ""),
+                        "standard_account_id": _text(elem, "StandardAccountID", ns, ""),
+                        "account_type": _text(elem, "AccountType", ns, ""),
+                        "opening_debit": _decimal(elem, "OpeningDebitBalance", ns),
+                        "opening_credit": _decimal(elem, "OpeningCreditBalance", ns),
+                        "closing_debit": _decimal(elem, "ClosingDebitBalance", ns),
+                        "closing_credit": _decimal(elem, "ClosingCreditBalance", ns),
+                        "standard_name": standard_name,
+                        "standard_version": standard_version,
+                    })
+                    elem.clear()
+                    continue
+
+            # --- TaxTableEntry ---
+            if local_tag == "TaxTableEntry":
+                tax_type = _text(elem, "TaxType", ns, "")
+                description = _text(elem, "Description", ns, "")
+                for detail in _findall(elem, "TaxCodeDetails", ns):
+                    data["tax_table"].append({
+                        "tax_type": tax_type,
+                        "description": description,
+                        "tax_code": _text(detail, "TaxCode", ns, ""),
+                        "detail_description": _text(detail, "Description", ns, ""),
+                        "tax_percentage": _decimal(detail, "TaxPercentage", ns),
+                        "country": _text(detail, "Country", ns, ""),
+                    })
+                elem.clear()
+                continue
+
+            # --- Supplier ---
+            if local_tag == "Supplier":
+                address = _find(elem, "Address", ns)
+                data["suppliers"].append({
+                    "supplier_id": _text(elem, "SupplierID", ns, ""),
+                    "registration_number": _text(elem, "RegistrationNumber", ns, ""),
+                    "name": _text(elem, "Name", ns, ""),
+                    "city": _text(address, "City", ns, "") if address is not None else "",
+                    "country": _text(address, "Country", ns, "") if address is not None else "",
+                    "tax_registration": _text(elem, "TaxRegistration/TaxRegistrationNumber", ns, ""),
+                })
+                elem.clear()
+                continue
+
+            # --- Customer ---
+            if local_tag == "Customer":
+                address = _find(elem, "Address", ns)
+                data["customers"].append({
+                    "customer_id": _text(elem, "CustomerID", ns, ""),
+                    "registration_number": _text(elem, "RegistrationNumber", ns, ""),
+                    "name": _text(elem, "Name", ns, ""),
+                    "city": _text(address, "City", ns, "") if address is not None else "",
+                    "country": _text(address, "Country", ns, "") if address is not None else "",
+                    "tax_registration": _text(elem, "TaxRegistration/TaxRegistrationNumber", ns, ""),
+                })
+                elem.clear()
+                continue
+
+            # --- MasterFiles section done ---
+            if local_tag == "MasterFiles":
+                if progress_callback:
+                    progress_callback(30, "Master-data udtrukket — parser transaktioner")
+                elem.clear()
+                while elem.getprevious() is not None:
+                    del elem.getparent()[0]
+                continue
+
+            # --- Journal (track current journal context) ---
+            if local_tag == "Journal":
+                current_journal_id = _text(elem, "JournalID", ns, "")
+                current_journal_desc = _text(elem, "Description", ns, "")
+                current_journal_type = _text(elem, "Type", ns, "")
+                if current_journal_id not in journal_txn_counts:
+                    journal_txn_counts[current_journal_id] = {
+                        "journal_id": current_journal_id,
+                        "description": current_journal_desc,
+                        "type": current_journal_type,
+                        "transaction_count": 0,
+                    }
+                # Parse transactions within this journal
+                for txn_elem in _findall(elem, "Transaction", ns):
+                    txn = _parse_single_transaction(txn_elem, current_journal_id, ns)
+                    data["transactions"].append(txn)
+                    journal_txn_counts[current_journal_id]["transaction_count"] += 1
+
+                elem.clear()
+                while elem.getprevious() is not None:
+                    del elem.getparent()[0]
+
+                # Rapportér fremskridt baseret på antal transaktioner
+                if progress_callback and len(data["transactions"]) % 5000 == 0:
+                    pct = min(80, 30 + int(50 * (len(data["transactions"]) / max(1, len(data["transactions"]) + 1000))))
+                    progress_callback(pct, f"{len(data['transactions'])} transaktioner behandlet")
+                continue
+
+            # --- GeneralLedgerEntries section done ---
+            if local_tag == "GeneralLedgerEntries":
+                elem.clear()
+                while elem.getprevious() is not None:
+                    del elem.getparent()[0]
+                continue
+
+        # Byg journal-oversigt
+        data["journals"] = list(journal_txn_counts.values())
+
+        if progress_callback:
+            progress_callback(85, "Beregner opsummering")
+
+        # Beregn opsummering
+        data["summary"] = _compute_summary(data)
+
+        if progress_callback:
+            progress_callback(90, "Parsing færdig")
+
+        return data
+
+    except Exception as e:
+        logger.error(f"Streaming-parse fejl: {e}")
+        return None
+
+
+def _parse_single_transaction(txn, journal_id, ns):
+    """Parse en enkelt Transaction-element til dict."""
+    txn_id = _text(txn, "TransactionID", ns, "")
+    txn_date = _text(txn, "TransactionDate", ns, "")
+    txn_desc = _text(txn, "Description", ns, "")
+    txn_period = _text(txn, "Period", ns, "")
+    txn_period_year = _text(txn, "PeriodYear", ns, "")
+
+    lines = []
+    for line in _findall(txn, "Line", ns):
+        record_id = _text(line, "RecordID", ns, "")
+        account_id = _text(line, "AccountID", ns, "")
+        description = _text(line, "Description", ns, "")
+
+        debit_el = _find(line, "DebitAmount", ns)
+        credit_el = _find(line, "CreditAmount", ns)
+
+        debit_amount = 0.0
+        credit_amount = 0.0
+        currency = ""
+
+        if debit_el is not None:
+            debit_amount = _decimal(debit_el, "Amount", ns)
+            currency = _text(debit_el, "CurrencyCode", ns, "")
+        if credit_el is not None:
+            credit_amount = _decimal(credit_el, "Amount", ns)
+            currency = _text(credit_el, "CurrencyCode", ns, "")
+
+        tax_info = _find(line, "TaxInformation", ns)
+        tax_code = ""
+        tax_percentage = 0.0
+        tax_amount = 0.0
+        tax_base = 0.0
+
+        if tax_info is not None:
+            tax_code = _text(tax_info, "TaxCode", ns, "")
+            tax_percentage = _decimal(tax_info, "TaxPercentage", ns)
+            tax_amount = _decimal(tax_info, "TaxAmount/Amount", ns)
+            tax_base = _decimal(tax_info, "TaxBase", ns)
+
+        supplier_id = _text(line, "SupplierID", ns, "")
+        customer_id = _text(line, "CustomerID", ns, "")
+        source_doc_id = _text(line, "SourceDocumentID", ns, "")
+
+        lines.append({
+            "record_id": record_id,
+            "account_id": account_id,
+            "description": description,
+            "debit_amount": debit_amount,
+            "credit_amount": credit_amount,
+            "currency": currency,
+            "tax_code": tax_code,
+            "tax_percentage": tax_percentage,
+            "tax_amount": tax_amount,
+            "tax_base": tax_base,
+            "supplier_id": supplier_id,
+            "customer_id": customer_id,
+            "source_document_id": source_doc_id,
+        })
+
+    return {
+        "transaction_id": txn_id,
+        "journal_id": journal_id,
+        "date": txn_date,
+        "description": txn_desc,
+        "period": txn_period,
+        "period_year": txn_period_year,
+        "lines": lines,
+        "total_debit": sum(l["debit_amount"] for l in lines),
+        "total_credit": sum(l["credit_amount"] for l in lines),
+    }
+
+
+def _parse_header_from_element(header, ns):
+    """Parse Header-element (brugt af streaming-parser)."""
+    if header is None:
+        return {}
+
+    company = _find(header, "Company", ns)
+    address = _find(company, "Address", ns) if company is not None else None
+    selection = _find(header, "SelectionCriteria", ns)
+
+    return {
+        "version": _text(header, "AuditFileVersion", ns, ""),
+        "country": _text(header, "AuditFileCountry", ns, ""),
+        "date_created": _text(header, "AuditFileDateCreated", ns, ""),
+        "software_company": _text(header, "SoftwareCompanyName", ns, ""),
+        "software_id": _text(header, "SoftwareID", ns, ""),
+        "software_version": _text(header, "SoftwareVersion", ns, ""),
+        "currency": _text(header, "DefaultCurrencyCode", ns, "DKK"),
+        "tax_accounting_basis": _text(header, "TaxAccountingBasis", ns, ""),
+        "company": {
+            "registration_number": _text(company, "RegistrationNumber", ns, "") if company is not None else "",
+            "name": _text(company, "Name", ns, "") if company is not None else "",
+            "city": _text(address, "City", ns, "") if address is not None else "",
+            "postal_code": _text(address, "PostalCode", ns, "") if address is not None else "",
+            "country": _text(address, "Country", ns, "") if address is not None else "",
+        },
+        "period": {
+            "start": _text(selection, "PeriodStart", ns, "") if selection is not None else "",
+            "start_year": _text(selection, "PeriodStartYear", ns, "") if selection is not None else "",
+            "end": _text(selection, "PeriodEnd", ns, "") if selection is not None else "",
+            "end_year": _text(selection, "PeriodEndYear", ns, "") if selection is not None else "",
+        },
+    }
+
+
+# =============================================================================
+# Original DOM helper-parsers (uændret)
+# =============================================================================
 
 def _parse_header(root, ns) -> dict:
     """Udtræk header-information."""
