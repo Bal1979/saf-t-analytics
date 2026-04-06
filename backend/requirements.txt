@@ -1,6 +1,7 @@
-fastapi
-uvicorn[standard]
-python-multipart
-lxml
-pydantic
-gunicorn
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-multipart==0.0.12
+lxml==6.0.2
+pydantic==2.10.0
+gunicorn==23.0.0
+pytest==8.3.3

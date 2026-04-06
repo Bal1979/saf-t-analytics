@@ -14,6 +14,12 @@ import shutil
 import threading
 import time
 import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+)
+
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -139,6 +145,7 @@ async def _save_upload(file: UploadFile) -> tuple:
         os.remove(file_path)
         raise HTTPException(400, "Filen er tom")
 
+    logger.info(f"File uploaded: {file.filename} ({file_size / (1024*1024):.2f} MB)")
     return file_path, file_size
 
 
@@ -153,6 +160,7 @@ def _cleanup(file_path: str):
 def _run_validate_job(job_id: str, file_path: str, saft_version: Optional[str], filename: str):
     """Kør validering i baggrundstråd."""
     try:
+        logger.info(f"Validation start: job={job_id} file={filename}")
         _update_job(job_id, status="processing", progress=5, message="Starter validering...")
         report = generate_report(file_path, saft_version)
         result = {
@@ -165,6 +173,7 @@ def _run_validate_job(job_id: str, file_path: str, saft_version: Optional[str], 
             "warnings": report["warnings"],
         }
         _update_job(job_id, status="completed", progress=100, message="Validering færdig", result=result)
+        logger.info(f"Validation end: job={job_id} file={filename}")
     except Exception as e:
         logger.error(f"Job {job_id} fejlede: {e}")
         _update_job(job_id, status="failed", progress=100, message=str(e), error=str(e))
@@ -175,6 +184,7 @@ def _run_validate_job(job_id: str, file_path: str, saft_version: Optional[str], 
 def _run_analyze_job(job_id: str, file_path: str, filename: str):
     """Kør analytics i baggrundstråd."""
     try:
+        logger.info(f"Analysis start: job={job_id} file={filename}")
         _update_job(job_id, status="processing", progress=5, message="Starter analyse...")
         report = analyze_file(file_path)
         if report is None:
@@ -186,6 +196,7 @@ def _run_analyze_job(job_id: str, file_path: str, filename: str):
                 **report,
             }
             _update_job(job_id, status="completed", progress=100, message="Analyse færdig", result=result)
+            logger.info(f"Analysis end: job={job_id} file={filename}")
     except Exception as e:
         logger.error(f"Job {job_id} fejlede: {e}")
         _update_job(job_id, status="failed", progress=100, message=str(e), error=str(e))
@@ -196,6 +207,7 @@ def _run_analyze_job(job_id: str, file_path: str, filename: str):
 def _run_validate_and_analyze_job(job_id: str, file_path: str, saft_version: Optional[str], filename: str):
     """Kør både validering og analytics i baggrundstråd."""
     try:
+        logger.info(f"Validate-and-analyze start: job={job_id} file={filename}")
         _update_job(job_id, status="processing", progress=5, message="Starter validering...")
 
         # Validering
@@ -219,6 +231,7 @@ def _run_validate_and_analyze_job(job_id: str, file_path: str, saft_version: Opt
             "analytics": analytics,
         }
         _update_job(job_id, status="completed", progress=100, message="Validering og analyse færdig", result=result)
+        logger.info(f"Validate-and-analyze end: job={job_id} file={filename}")
     except Exception as e:
         logger.error(f"Job {job_id} fejlede: {e}")
         _update_job(job_id, status="failed", progress=100, message=str(e), error=str(e))
@@ -266,6 +279,7 @@ async def validate(
                 "mode": "validate",
                 "created_at": time.time(),
             }
+        logger.info(f"Job created: job={job_id} mode=validate file={file.filename} size={file_size}")
         thread = threading.Thread(
             target=_run_validate_job,
             args=(job_id, file_path, saft_version, file.filename),
@@ -281,6 +295,7 @@ async def validate(
 
     # Små filer: synkron behandling (som hidtil)
     try:
+        logger.info(f"Validation start (sync): file={file.filename}")
         report = generate_report(file_path, saft_version)
         return {
             "type": "validation",
@@ -291,6 +306,9 @@ async def validate(
             "errors": report["errors"],
             "warnings": report["warnings"],
         }
+    except Exception:
+        logger.error(f"Validation failed (sync): file={file.filename}", exc_info=True)
+        raise
     finally:
         _cleanup(file_path)
 
@@ -318,6 +336,7 @@ async def analyze(
                 "mode": "analyze",
                 "created_at": time.time(),
             }
+        logger.info(f"Job created: job={job_id} mode=analyze file={file.filename} size={file_size}")
         thread = threading.Thread(
             target=_run_analyze_job,
             args=(job_id, file_path, file.filename),
@@ -333,9 +352,11 @@ async def analyze(
 
     # Små filer: synkron behandling
     try:
+        logger.info(f"Analysis start (sync): file={file.filename}")
         report = analyze_file(file_path)
         if report is None:
             raise HTTPException(400, "Kunne ikke parse SAF-T filen")
+        logger.info(f"Analysis end (sync): file={file.filename}")
         return {
             "type": "analytics",
             "filename": file.filename,
@@ -370,6 +391,7 @@ async def validate_and_analyze(
                 "mode": "validate-and-analyze",
                 "created_at": time.time(),
             }
+        logger.info(f"Job created: job={job_id} mode=validate-and-analyze file={file.filename} size={file_size}")
         thread = threading.Thread(
             target=_run_validate_and_analyze_job,
             args=(job_id, file_path, saft_version, file.filename),
@@ -385,6 +407,7 @@ async def validate_and_analyze(
 
     # Små filer: synkron behandling
     try:
+        logger.info(f"Validate-and-analyze start (sync): file={file.filename}")
         # Validering
         validation = generate_report(file_path, saft_version)
 

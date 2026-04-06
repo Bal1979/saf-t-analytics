@@ -4,9 +4,12 @@ Kører alle 103 momsanalysetests og returnerer struktureret rapport
 med findings klassificeret efter impact-type, retning og sværhedsgrad.
 """
 
+import logging
 from typing import Optional
 from analytics.parser import parse_saft_file
 from analytics.models import make_finding
+
+logger = logging.getLogger(__name__)
 
 # Import test-kategorier
 from analytics.categories.cat01_transaction_integrity import run_transaction_integrity_tests
@@ -41,13 +44,17 @@ def run_all_tests(data: dict) -> dict:
     all_findings = []
 
     # Kør implementerede kategorier
+    logger.info("Running transaction integrity tests")
     all_findings.extend(run_transaction_integrity_tests(data))
+    logger.info("Running duplicate detection tests")
     all_findings.extend(run_duplicate_detection_tests(data))
 
     # TODO: Tilføj flere kategorier her efterhånden
     # all_findings.extend(run_vat_rate_tests(data))
     # all_findings.extend(run_cross_border_tests(data))
     # ...
+
+    logger.info(f"All tests complete: {len(all_findings)} findings")
 
     # Byg rapport
     report = build_report(data, all_findings)
@@ -141,9 +148,12 @@ def analyze_file(file_path: str) -> Optional[dict]:
     Hovedfunktion: Parser en SAF-T fil og kører alle analytics tests.
     Returnerer fuld rapport eller None ved fejl.
     """
+    logger.info(f"Analyzing file: {file_path}")
     data = parse_saft_file(file_path)
     if data is None:
+        logger.error(f"Failed to parse SAF-T file: {file_path}")
         return None
 
     report = run_all_tests(data)
+    logger.info(f"Analysis complete: score={report.get('overall_score')} findings={report.get('total_findings')}")
     return report
